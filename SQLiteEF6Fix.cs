@@ -1,9 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Data;
+﻿using System.Collections.Generic;
 using System.Data.SQLite;
 using System.Linq;
 using System.Threading;
+using static System.Data.SQLite.SQLiteConnectionEventType;
+
 
 namespace MolioDocEF6
 {
@@ -12,8 +12,9 @@ namespace MolioDocEF6
     /// garbage collector closes them. This fix takes care of closing all commands immediately after SQLiteConnection is
     /// closed.
     /// 
-    /// It's copied from https://stackoverflow.com/a/38268171/1193236 and altered with ThreadLocal to make it thread safe.
-    /// It must be run once, and only once, preferably at application startup, before using SQLiteConnection.
+    /// It's copied from https://stackoverflow.com/a/38268171/1193236 and altered with AsyncLocal to make it thread safe and
+    /// safe to use with async code. It must be run once, and only once, preferably at application startup, before using
+    /// SQLiteConnection.
     /// 
     /// You might not need this fix if you only issue write commands. Unclosed commands seems to only be a problem
     /// when reading data.
@@ -32,45 +33,41 @@ namespace MolioDocEF6
     /// </summary>
     public static class SQLiteEF6Fix
     {
-        static readonly ThreadLocal<List<SQLiteCommand>> OpenCommands = new ThreadLocal<List<SQLiteCommand>>(() => new List<SQLiteCommand>());
-
         public static void Initialise()
         {
-            SQLiteConnection.Changed += SqLiteConnectionOnChanged;
+            SQLiteConnection.Changed += SQLiteConnectionChanged;
         }
 
-        static void SqLiteConnectionOnChanged(object sender, ConnectionEventArgs connectionEventArgs)
+        static readonly AsyncLocal<List<SQLiteCommand>> OpenCommands = new AsyncLocal<List<SQLiteCommand>>();
+
+        static List<SQLiteCommand> Instance() => OpenCommands.Value ?? (OpenCommands.Value = new List<SQLiteCommand>());
+
+        static void Add(SQLiteCommand command) => Instance().Add(command);
+
+        static void Remove(SQLiteCommand command) => Instance().Remove(command);
+
+        static List<SQLiteCommand> CopyOpenCommands() => Instance().ToList();
+
+        static void SQLiteConnectionChanged(object sender, ConnectionEventArgs eventArgs)
         {
-            if (connectionEventArgs.EventType == SQLiteConnectionEventType.NewCommand && connectionEventArgs.Command is SQLiteCommand)
+            if (eventArgs.EventType == NewCommand && eventArgs.Command is SQLiteCommand newCommand)
             {
-                OpenCommands.Value.Add((SQLiteCommand)connectionEventArgs.Command);
+                // Whenever a SQLiteCommand is executed, it's added to the list of open connections
+                Add(newCommand);
             }
-            else if (connectionEventArgs.EventType == SQLiteConnectionEventType.DisposingCommand && connectionEventArgs.Command is SQLiteCommand)
+            else if (eventArgs.EventType == DisposingCommand && eventArgs.Command is SQLiteCommand disposedCommand)
             {
-                try
-                {
-                    OpenCommands.Value.Remove((SQLiteCommand)connectionEventArgs.Command);
-                }
-                catch (ObjectDisposedException)
-                {
-                    // OpenCommands have been disposed. The thread is gone, and there's nothing to do.
-                }
+                // Entity Framework sometimes remembers to dispose a command, in that case it can be removed
+                Remove(disposedCommand);
             }
 
-            if (connectionEventArgs.EventType == SQLiteConnectionEventType.Closed)
+            if (eventArgs.EventType == Closed)
             {
-                var commands = OpenCommands.Value.ToList();
-                foreach (var cmd in commands)
+                // Wrap up and close all commands (with a copy of the list because it's changed in the loop)
+                foreach (var command in CopyOpenCommands())
                 {
-                    if (cmd.Connection == null)
-                    {
-                        OpenCommands.Value.Remove(cmd);
-                    }
-                    else if (cmd.Connection.State == ConnectionState.Closed)
-                    {
-                        cmd.Connection = null;
-                        OpenCommands.Value.Remove(cmd);
-                    }
+                    command.Connection = null;
+                    Remove(command);
                 }
             }
         }
