@@ -5,6 +5,89 @@ pragma foreign_keys = on;
 pragma user_version = 1;
 
 -------------------------------------------------------------------------------
+-- Basisbeskrivelse
+-------------------------------------------------------------------------------
+
+create table basisbeskrivelse (
+  basisbeskrivelse_id integer primary key,
+  name                text    not null
+);
+
+create table basisbeskrivelse_section (
+  basisbeskrivelse_section_id integer primary key,
+  basisbeskrivelse_id         integer not null,
+  section_no                  integer not null,
+  heading                     text    not null,
+  text                        text    not null default '',
+  molio_section_guid          blob,
+  parent_id                   integer,
+
+  foreign key (basisbeskrivelse_id) references basisbeskrivelse,
+  foreign key (parent_id) references basisbeskrivelse_section,
+
+  constraint "molio_section_guid is not a valid guid"
+    check (
+      molio_section_guid is null or
+      ( typeof(molio_section_guid) = 'blob' and
+        length(molio_section_guid) = 16 ))
+);
+
+create table basisbeskrivelse_section_attachment (
+  basisbeskrivelse_section_attachment_id integer primary key,
+  basisbeskrivelse_section_id            integer not null,
+  attachment_id                          integer not null,
+
+  foreign key (basisbeskrivelse_section_id) references basisbeskrivelse_section,
+  foreign key (attachment_id) references attachment
+);
+
+-------------------------------------------------------------------------------
+-- Vejledning
+-------------------------------------------------------------------------------
+
+create table vejledning (
+  vejledning_id integer primary key,
+  name          text    not null
+);
+
+create table vejledning_section (
+  vejledning_section_id integer primary key,
+  vejledning_id         integer not null,
+  section_no            integer not null,
+  heading               text    not null,
+  text                  text    not null default '',
+  molio_section_guid    blob,
+  parent_id             integer,
+
+  foreign key (vejledning_id) references vejledning,
+  foreign key (parent_id) references vejledning_section,
+
+  constraint "molio_section_guid is not a valid guid"
+    check (
+      molio_section_guid is null or
+      ( typeof(molio_section_guid) = 'blob' and
+        length(molio_section_guid) = 16 ))
+);
+
+create table vejledning_section_attachment (
+  vejledning_section_attachment_id integer primary key,
+  vejledning_section_id            integer not null,
+  attachment_id                    integer not null,
+
+  foreign key (vejledning_section_id) references vejledning_section,
+  foreign key (attachment_id) references attachment
+);
+
+-- sqlite treats all null values as different, so a constraint like
+-- unique (parent_id, section_no) won't do, because parent_id can be null.
+create unique index vejledning_section_unique_idx
+on vejledning_section (
+  vejledning_id,
+  ifnull(parent_id, -1),
+  section_no
+);
+
+-------------------------------------------------------------------------------
 -- Projekt
 -------------------------------------------------------------------------------
 
@@ -29,8 +112,17 @@ create table attachment (
   name          text    not null,
   mime_type     text    not null,
   content       blob    not null, -- Encode as UTF-8 if storing text
+  hash          blob,             -- SHA1 hash (optional)
 
-  constraint "content is not a blob" check (typeof(content) = 'blob')
+  constraint "content is not a blob" check (typeof(content) = 'blob'),
+
+  constraint "hash is not a valid SHA1 hash"
+    check (
+      hash is null or
+      ( typeof(hash) = 'blob' and
+        length(hash) = 20 )),
+
+  constraint "duplicate hash detected" unique (hash)
 );
 
 -------------------------------------------------------------------------------
@@ -40,8 +132,6 @@ create table attachment (
 create table bygningsdelsbeskrivelse (
   bygningsdelsbeskrivelse_id    integer primary key,
   name                          text    not null,
-
-  -- Used for references outside of database, must be kept the same across exports
   bygningsdelsbeskrivelse_guid  blob    not null,
   basisbeskrivelse_version_guid blob    not null,
 
@@ -85,10 +175,7 @@ create table bygningsdelsbeskrivelse_section_attachment (
   foreign key (bygningsdelsbeskrivelse_section_id)
   references bygningsdelsbeskrivelse_section,
 
-  foreign key (attachment_id) references attachment,
-  
-  constraint "Same attachment cannot be referenced more than once for the same bygningsdelsbeskrivelse_section"
-    unique (bygningsdelsbeskrivelse_section_id, attachment_id)
+  foreign key (attachment_id) references attachment
 );
 
 -- sqlite treats all null values as different, so a constraint like
@@ -109,7 +196,7 @@ create table arbejdsbeskrivelse (
   work_area_code        text    not null,
   work_area_name        text    not null,
 
-  -- Key is used to associate foreign data with an arbejdsbeskrivelse
+  -- Key is used to associate external data with an arbejdsbeskrivelse
   -- and must be the same for every export of this project
   key                   blob    not null,
 
@@ -144,9 +231,7 @@ create table arbejdsbeskrivelse_section_bygningsdelsbeskrivelse (
   arbejdsbeskrivelse_section_id                         integer not null,
   bygningsdelsbeskrivelse_id                            integer not null,
 
-  foreign key (arbejdsbeskrivelse_section_id)
-  references arbejdsbeskrivelse_section,
-  
+  foreign key (arbejdsbeskrivelse_section_id) references arbejdsbeskrivelse_section,
   foreign key (bygningsdelsbeskrivelse_id) references bygningsdelsbeskrivelse,
 
   constraint "Same bygningsdelsbeskrivelse cannot be referenced more than once for the same arbejdsbeskrivelse_section"
