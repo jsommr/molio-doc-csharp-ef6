@@ -33,20 +33,7 @@ namespace MolioDocEF6
     /// </summary>
     public static class SQLiteEF6Fix
     {
-        public static void Initialise()
-        {
-            SQLiteConnection.Changed += SQLiteConnectionChanged;
-        }
-
-        static readonly AsyncLocal<List<SQLiteCommand>> OpenCommands = new AsyncLocal<List<SQLiteCommand>>();
-
-        static List<SQLiteCommand> Instance() => OpenCommands.Value ?? (OpenCommands.Value = new List<SQLiteCommand>());
-
-        static void Add(SQLiteCommand command) => Instance().Add(command);
-
-        static void Remove(SQLiteCommand command) => Instance().Remove(command);
-
-        static List<SQLiteCommand> CopyOpenCommands() => Instance().ToList();
+        public static void Initialize() => SQLiteConnection.Changed += SQLiteConnectionChanged;
 
         static void SQLiteConnectionChanged(object sender, ConnectionEventArgs eventArgs)
         {
@@ -60,8 +47,7 @@ namespace MolioDocEF6
                 // Entity Framework sometimes remembers to dispose a command, in that case it can be removed
                 Remove(disposedCommand);
             }
-
-            if (eventArgs.EventType == Closed)
+            else if (eventArgs.EventType == Closed)
             {
                 // Wrap up and close all commands (with a copy of the list because it's changed in the loop)
                 foreach (var command in CopyOpenCommands())
@@ -71,5 +57,15 @@ namespace MolioDocEF6
                 }
             }
         }
+
+        static void Add(SQLiteCommand command) => GetOpenCommands().Add(command);
+
+        static void Remove(SQLiteCommand command) => GetOpenCommands().Remove(command);
+
+        static List<SQLiteCommand> CopyOpenCommands() => GetOpenCommands().ToList();
+
+        static List<SQLiteCommand> GetOpenCommands() => openCommands.Value ?? (openCommands.Value = new List<SQLiteCommand>());
+
+        static readonly AsyncLocal<List<SQLiteCommand>> openCommands = new AsyncLocal<List<SQLiteCommand>>();
     }
 }
